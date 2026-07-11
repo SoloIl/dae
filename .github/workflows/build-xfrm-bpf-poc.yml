@@ -2,6 +2,11 @@ name: Build XFRM BPF POC
 
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - "poc/xfrm_state_probe.c"
+      - "poc/xfrm_state_probe.md"
+      - ".github/workflows/build-xfrm-bpf-poc.yml"
 
 permissions: read-all
 
