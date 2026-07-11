@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0
 // Passive tc-BPF packet-shape probe for decrypted IPsec/XFRM traffic on xfrm0.
 //
+// This version intentionally uses bpf_skb_load_bytes() instead of direct
+// packet access, matching DAE's slow parser path more closely.
+//
 // Safety:
 // - does not modify skb data;
 // - does not set skb->mark;
@@ -87,6 +90,9 @@ struct udphdr {
 };
 
 static long (*const bpf_trace_printk)(const char *fmt, __u32 fmt_size, ...) = (void *)6;
+static long (*const bpf_skb_load_bytes)(const struct __sk_buff *skb,
+					__u32 offset, void *to,
+					__u32 len) = (void *)26;
 
 #define bpf_printk(fmt, ...) ({				\
 	char ____fmt[] = fmt;				\
@@ -104,96 +110,127 @@ static __always_inline __u32 bpf_ntohl(__be32 v)
 	return __builtin_bswap32(v);
 }
 
-static __always_inline int parse_l3_packet(struct __sk_buff *skb, __u32 hook_id)
+static __always_inline int load_u8(struct __sk_buff *skb, __u32 offset, __u8 *value)
 {
-	void *data = (void *)(long)skb->data;
-	void *data_end = (void *)(long)skb->data_end;
+	*value = 0xff;
+	return bpf_skb_load_bytes(skb, offset, value, sizeof(*value));
+}
 
-	if (data + 1 > data_end) {
-		bpf_printk("shape hook=%u short if=%u ingress=%u\n",
-			   hook_id, skb->ifindex, skb->ingress_ifindex);
-		return TC_ACT_PIPE;
-	}
-
-	__u8 version = (*(__u8 *)data) >> 4;
+static __always_inline int parse_at_offset(struct __sk_buff *skb, __u32 hook_id,
+					   __u32 offset, __u8 version)
+{
+	__u32 l3_offset = offset;
 
 	if (version == 4) {
-		struct iphdr *iph = data;
+		struct iphdr iph = {};
 		__u32 ihl;
-		void *l4;
+		int ret;
 
-		if ((void *)(iph + 1) > data_end) {
-			bpf_printk("shape hook=%u ip4_short if=%u ingress=%u\n",
-				   hook_id, skb->ifindex, skb->ingress_ifindex);
+		ret = bpf_skb_load_bytes(skb, l3_offset, &iph, sizeof(iph));
+		if (ret) {
+			bpf_printk("shape hook=%u ip4_load_err=%d off=%u\n",
+				   hook_id, ret, l3_offset);
 			return TC_ACT_PIPE;
 		}
 
-		ihl = (iph->ihl_version & 0x0f) * 4;
-		if (ihl < sizeof(*iph) || data + ihl > data_end) {
-			bpf_printk("shape hook=%u ip4_bad_ihl ihl=%u mark=0x%x\n",
-				   hook_id, ihl, skb->mark);
+		ihl = (iph.ihl_version & 0x0f) * 4;
+		if (ihl < sizeof(iph)) {
+			bpf_printk("shape hook=%u ip4_bad_ihl ihl=%u off=%u\n",
+				   hook_id, ihl, l3_offset);
 			return TC_ACT_PIPE;
 		}
 
-		bpf_printk("shape hook=%u ip4 proto=%u mark=0x%x\n",
-			   hook_id, iph->protocol, skb->mark);
-		bpf_printk("shape if=%u ingress=%u ihl=%u\n",
-			   skb->ifindex, skb->ingress_ifindex, ihl);
+		bpf_printk("shape hook=%u ip4 off=%u proto=%u mark=0x%x\n",
+			   hook_id, l3_offset, iph.protocol, skb->mark);
 		bpf_printk("shape sip=0x%x dip=0x%x\n",
-			   bpf_ntohl(iph->saddr), bpf_ntohl(iph->daddr));
+			   bpf_ntohl(iph.saddr), bpf_ntohl(iph.daddr));
 
-		l4 = data + ihl;
-		if (iph->protocol == IPPROTO_TCP) {
-			struct tcphdr *tcp = l4;
+		if (iph.protocol == IPPROTO_TCP) {
+			struct tcphdr tcp = {};
 			__u8 syn_ack;
 
-			if ((void *)(tcp + 1) > data_end) {
-				bpf_printk("shape hook=%u tcp_short mark=0x%x\n",
-					   hook_id, skb->mark);
+			ret = bpf_skb_load_bytes(skb, l3_offset + ihl, &tcp,
+						 sizeof(tcp));
+			if (ret) {
+				bpf_printk("shape hook=%u tcp_load_err=%d off=%u\n",
+					   hook_id, ret, l3_offset + ihl);
 				return TC_ACT_PIPE;
 			}
 
-			syn_ack = (tcp->flags & 0x12);
+			syn_ack = (tcp.flags & 0x12);
 			bpf_printk("shape tcp sport=%u dport=%u flags=0x%x\n",
-				   bpf_ntohs(tcp->source), bpf_ntohs(tcp->dest),
-				   tcp->flags);
+				   bpf_ntohs(tcp.source), bpf_ntohs(tcp.dest),
+				   tcp.flags);
 			bpf_printk("shape tcp synack=0x%x seq=0x%x ack=0x%x\n",
-				   syn_ack, bpf_ntohl(tcp->seq),
-				   bpf_ntohl(tcp->ack_seq));
-		} else if (iph->protocol == IPPROTO_UDP) {
-			struct udphdr *udp = l4;
+				   syn_ack, bpf_ntohl(tcp.seq),
+				   bpf_ntohl(tcp.ack_seq));
+		} else if (iph.protocol == IPPROTO_UDP) {
+			struct udphdr udp = {};
 
-			if ((void *)(udp + 1) > data_end) {
-				bpf_printk("shape hook=%u udp_short mark=0x%x\n",
-					   hook_id, skb->mark);
+			ret = bpf_skb_load_bytes(skb, l3_offset + ihl, &udp,
+						 sizeof(udp));
+			if (ret) {
+				bpf_printk("shape hook=%u udp_load_err=%d off=%u\n",
+					   hook_id, ret, l3_offset + ihl);
 				return TC_ACT_PIPE;
 			}
 
 			bpf_printk("shape udp sport=%u dport=%u len=%u\n",
-				   bpf_ntohs(udp->source), bpf_ntohs(udp->dest),
-				   bpf_ntohs(udp->len));
+				   bpf_ntohs(udp.source), bpf_ntohs(udp.dest),
+				   bpf_ntohs(udp.len));
 		}
 	} else if (version == 6) {
-		struct ipv6hdr *ip6h = data;
+		struct ipv6hdr ip6h = {};
+		int ret;
 
-		if ((void *)(ip6h + 1) > data_end) {
-			bpf_printk("shape hook=%u ip6_short if=%u ingress=%u\n",
-				   hook_id, skb->ifindex, skb->ingress_ifindex);
+		ret = bpf_skb_load_bytes(skb, l3_offset, &ip6h, sizeof(ip6h));
+		if (ret) {
+			bpf_printk("shape hook=%u ip6_load_err=%d off=%u\n",
+				   hook_id, ret, l3_offset);
 			return TC_ACT_PIPE;
 		}
 
-		bpf_printk("shape hook=%u ip6 nexthdr=%u mark=0x%x\n",
-			   hook_id, ip6h->nexthdr, skb->mark);
-		bpf_printk("shape if=%u ingress=%u plen=%u\n",
-			   skb->ifindex, skb->ingress_ifindex,
-			   bpf_ntohs(ip6h->payload_len));
+		bpf_printk("shape hook=%u ip6 off=%u nexthdr=%u mark=0x%x\n",
+			   hook_id, l3_offset, ip6h.nexthdr, skb->mark);
+		bpf_printk("shape plen=%u if=%u ingress=%u\n",
+			   bpf_ntohs(ip6h.payload_len), skb->ifindex,
+			   skb->ingress_ifindex);
 	} else {
-		bpf_printk("shape hook=%u unknown_l3=%u if=%u\n",
-			   hook_id, version, skb->ifindex);
-		bpf_printk("shape ingress=%u mark=0x%x proto=0x%x\n",
-			   skb->ingress_ifindex, skb->mark, skb->protocol);
+		bpf_printk("shape hook=%u unexpected_version=%u off=%u\n",
+			   hook_id, version, l3_offset);
 	}
 
+	return TC_ACT_PIPE;
+}
+
+static __always_inline int parse_l3_packet(struct __sk_buff *skb, __u32 hook_id)
+{
+	__u8 b0, b4, b8, b14;
+	int r0, r4, r8, r14;
+
+	r0 = load_u8(skb, 0, &b0);
+	r4 = load_u8(skb, 4, &b4);
+	r8 = load_u8(skb, 8, &b8);
+	r14 = load_u8(skb, 14, &b14);
+
+	bpf_printk("shape hook=%u scan r0=%d b0=0x%x r4=%d b4=0x%x\n",
+		   hook_id, r0, b0, r4, b4);
+	bpf_printk("shape scan r8=%d b8=0x%x r14=%d b14=0x%x proto=0x%x\n",
+		   r8, b8, r14, b14, skb->protocol);
+	bpf_printk("shape if=%u ingress=%u mark=0x%x\n",
+		   skb->ifindex, skb->ingress_ifindex, skb->mark);
+
+	if (!r0 && ((b0 >> 4) == 4 || (b0 >> 4) == 6))
+		return parse_at_offset(skb, hook_id, 0, b0 >> 4);
+	if (!r4 && ((b4 >> 4) == 4 || (b4 >> 4) == 6))
+		return parse_at_offset(skb, hook_id, 4, b4 >> 4);
+	if (!r8 && ((b8 >> 4) == 4 || (b8 >> 4) == 6))
+		return parse_at_offset(skb, hook_id, 8, b8 >> 4);
+	if (!r14 && ((b14 >> 4) == 4 || (b14 >> 4) == 6))
+		return parse_at_offset(skb, hook_id, 14, b14 >> 4);
+
+	bpf_printk("shape hook=%u no_ip_version_found len=%u\n",
+		   hook_id, skb->len);
 	return TC_ACT_PIPE;
 }
 

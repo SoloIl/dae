@@ -1,7 +1,8 @@
 # XFRM packet-shape tc-BPF probe
 
 This POC runs before DAE on `xfrm0` ingress and prints the visible L3/L4 packet
-shape.
+shape. It reads packet bytes with `bpf_skb_load_bytes()` to mirror DAE's slow
+parser path more closely than direct packet access.
 
 It is passive:
 
@@ -47,6 +48,8 @@ Then connect the IKEv2 client and generate a small amount of traffic.
 
 Useful fields:
 
+- `scan ... b0/b4/b8/b14`: first byte visible at candidate L3 offsets;
+- `ip4 off=...`: IPv4 header found at that offset;
 - `ip4 proto=6`: TCP;
 - `ip4 proto=17`: UDP;
 - `sip` / `dip`: IPv4 addresses in hexadecimal host byte order;
