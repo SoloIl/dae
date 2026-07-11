@@ -140,8 +140,10 @@ static __always_inline int parse_at_offset(struct __sk_buff *skb, __u32 hook_id,
 			return TC_ACT_PIPE;
 		}
 
-		bpf_printk("shape hook=%u ip4 off=%u proto=%u mark=0x%x\n",
-			   hook_id, l3_offset, iph.protocol, skb->mark);
+		bpf_printk("shape hook=%u ip4 off=%u proto=%u\n",
+			   hook_id, l3_offset, iph.protocol);
+		bpf_printk("shape mark=0x%x ihl=%u len=%u\n",
+			   skb->mark, ihl, skb->len);
 		bpf_printk("shape sip=0x%x dip=0x%x\n",
 			   bpf_ntohl(iph.saddr), bpf_ntohl(iph.daddr));
 
@@ -190,8 +192,9 @@ static __always_inline int parse_at_offset(struct __sk_buff *skb, __u32 hook_id,
 			return TC_ACT_PIPE;
 		}
 
-		bpf_printk("shape hook=%u ip6 off=%u nexthdr=%u mark=0x%x\n",
-			   hook_id, l3_offset, ip6h.nexthdr, skb->mark);
+		bpf_printk("shape hook=%u ip6 off=%u nexthdr=%u\n",
+			   hook_id, l3_offset, ip6h.nexthdr);
+		bpf_printk("shape mark=0x%x len=%u\n", skb->mark, skb->len);
 		bpf_printk("shape plen=%u if=%u ingress=%u\n",
 			   bpf_ntohs(ip6h.payload_len), skb->ifindex,
 			   skb->ingress_ifindex);
@@ -213,10 +216,11 @@ static __always_inline int parse_l3_packet(struct __sk_buff *skb, __u32 hook_id)
 	r8 = load_u8(skb, 8, &b8);
 	r14 = load_u8(skb, 14, &b14);
 
-	bpf_printk("shape hook=%u scan r0=%d b0=0x%x r4=%d b4=0x%x\n",
-		   hook_id, r0, b0, r4, b4);
-	bpf_printk("shape scan r8=%d b8=0x%x r14=%d b14=0x%x proto=0x%x\n",
-		   r8, b8, r14, b14, skb->protocol);
+	bpf_printk("shape hook=%u scan r0=%d b0=0x%x\n",
+		   hook_id, r0, b0);
+	bpf_printk("shape scan r4=%d b4=0x%x r8=%d\n", r4, b4, r8);
+	bpf_printk("shape scan b8=0x%x r14=%d b14=0x%x\n", b8, r14, b14);
+	bpf_printk("shape proto=0x%x len=%u\n", skb->protocol, skb->len);
 	bpf_printk("shape if=%u ingress=%u mark=0x%x\n",
 		   skb->ifindex, skb->ingress_ifindex, skb->mark);
 
