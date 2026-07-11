@@ -224,13 +224,13 @@ static __always_inline int parse_l3_packet(struct __sk_buff *skb, __u32 hook_id)
 	bpf_printk("shape if=%u ingress=%u mark=0x%x\n",
 		   skb->ifindex, skb->ingress_ifindex, skb->mark);
 
-	if (!r0 && ((b0 >> 4) == 4 || (b0 >> 4) == 6))
+	if (!r0 && ((b0 >> 4) == 6 || ((b0 >> 4) == 4 && (b0 & 0x0f) >= 5)))
 		return parse_at_offset(skb, hook_id, 0, b0 >> 4);
-	if (!r4 && ((b4 >> 4) == 4 || (b4 >> 4) == 6))
+	if (!r4 && ((b4 >> 4) == 6 || ((b4 >> 4) == 4 && (b4 & 0x0f) >= 5)))
 		return parse_at_offset(skb, hook_id, 4, b4 >> 4);
-	if (!r8 && ((b8 >> 4) == 4 || (b8 >> 4) == 6))
+	if (!r8 && ((b8 >> 4) == 6 || ((b8 >> 4) == 4 && (b8 & 0x0f) >= 5)))
 		return parse_at_offset(skb, hook_id, 8, b8 >> 4);
-	if (!r14 && ((b14 >> 4) == 4 || (b14 >> 4) == 6))
+	if (!r14 && ((b14 >> 4) == 6 || ((b14 >> 4) == 4 && (b14 & 0x0f) >= 5)))
 		return parse_at_offset(skb, hook_id, 14, b14 >> 4);
 
 	bpf_printk("shape hook=%u no_ip_version_found len=%u\n",

@@ -50,6 +50,8 @@ Useful fields:
 
 - `scan ... b0/b4/b8/b14`: first byte visible at candidate L3 offsets;
 - `ip4 off=...`: IPv4 header found at that offset;
+- IPv4 candidates with invalid IHL are skipped, so a stray byte like `0x40`
+  is not treated as a real IPv4 header;
 - `ip4 proto=6`: TCP;
 - `ip4 proto=17`: UDP;
 - `sip` / `dip`: IPv4 addresses in hexadecimal host byte order;
