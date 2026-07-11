@@ -1,0 +1,46 @@
+name: Build XFRM BPF POC
+
+on:
+  workflow_dispatch:
+
+permissions: read-all
+
+concurrency:
+  group: "${{ github.workflow }}-${{ github.ref }}"
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build xfrm_state_probe.o
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d632683dd7b4114ad314bca15554477dd762a938 # v4.2.0
+        with:
+          persist-credentials: false
+
+      - name: Install LLVM
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get -y install clang llvm file
+
+      - name: Build tc-BPF object
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          clang -O2 -g -target bpf \
+            -c poc/xfrm_state_probe.c \
+            -o dist/xfrm_state_probe.o
+          file dist/xfrm_state_probe.o
+          llvm-objdump -h dist/xfrm_state_probe.o
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: xfrm-bpf-poc
+          path: dist/xfrm_state_probe.o
+          if-no-files-found: error
