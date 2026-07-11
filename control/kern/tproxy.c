@@ -65,6 +65,22 @@
 
 #define NDP_REDIRECT 137
 
+struct dae_bpf_xfrm_state {
+	__u32 reqid;
+	__u32 spi;
+	__u16 family;
+	__u16 ext;
+	union {
+		__u32 remote_ipv4;
+		__u32 remote_ipv6[4];
+	};
+};
+
+static long (*const dae_bpf_skb_get_xfrm_state)(
+	struct __sk_buff *skb, __u32 index,
+	struct dae_bpf_xfrm_state *xfrm_state, __u32 size,
+	__u64 flags) = (void *)66;
+
 // Param keys:
 static const __u32 zero_key;
 static const __u32 one_key = 1;
@@ -1002,6 +1018,43 @@ parse_packet(struct __sk_buff *skb, __u32 link_h_len,
 	out->listener_l4proto = ctx->listener_l4proto;
 	get_tuples(skb, &out->tuples, &ctx->iph, &ctx->ipv6h, &ctx->tcph, &ctx->udph, ctx->l4proto);
 	return ret;
+}
+
+static __always_inline bool first_byte_looks_like_l3(__u8 first)
+{
+	__u8 version = first >> 4;
+
+	if (version == 4)
+		return (first & 0x0f) >= 5;
+	return version == 6;
+}
+
+static __always_inline bool skb_has_xfrm_state(struct __sk_buff *skb)
+{
+	struct dae_bpf_xfrm_state xs = {};
+
+	return dae_bpf_skb_get_xfrm_state(skb, 0, &xs, sizeof(xs), 0) == 0;
+}
+
+static __always_inline bool skb_has_l2_l3_header(struct __sk_buff *skb)
+{
+	__u8 first = 0;
+
+	if (bpf_skb_load_bytes(skb, ETH_HLEN, &first, sizeof(first)))
+		return false;
+	return first_byte_looks_like_l3(first);
+}
+
+static __always_inline bool should_retry_lan_ingress_as_l2(
+	struct __sk_buff *skb, __u32 link_h_len, int ret)
+{
+	if (link_h_len != 0)
+		return false;
+	if (ret != -EFAULT)
+		return false;
+	if (!skb_has_xfrm_state(skb))
+		return false;
+	return skb_has_l2_l3_header(skb);
 }
 
 struct route_ctx {
@@ -2059,6 +2112,15 @@ static __noinline int do_tproxy_lan_ingress(struct __sk_buff *skb, __u32 link_h_
 	 * track writes done through callee pointer arguments. */
 	__builtin_memset(pkt, 0, sizeof(*pkt));
 	int ret = parse_packet(skb, link_h_len, pkt);
+
+	// Some post-XFRM ingress packets arrive on L3 interfaces with an
+	// Ethernet-sized header still visible before the inner IP packet.
+	if (should_retry_lan_ingress_as_l2(skb, link_h_len, ret)) {
+		__builtin_memset(pkt, 0, sizeof(*pkt));
+		ret = parse_packet(skb, ETH_HLEN, pkt);
+		if (!ret)
+			link_h_len = ETH_HLEN;
+	}
 
 	if (ret) {
 		if (ret < 0) {
