@@ -6,6 +6,8 @@ on:
     paths:
       - "poc/xfrm_state_probe.c"
       - "poc/xfrm_state_probe.md"
+      - "poc/xfrm_packet_shape_probe.c"
+      - "poc/xfrm_packet_shape_probe.md"
       - ".github/workflows/build-xfrm-bpf-poc.yml"
 
 permissions: read-all
@@ -16,7 +18,7 @@ concurrency:
 
 jobs:
   build:
-    name: build xfrm_state_probe.o
+    name: build XFRM BPF POC objects
     runs-on: ubuntu-latest
 
     steps:
@@ -40,12 +42,17 @@ jobs:
           clang -O2 -g -target bpf \
             -c poc/xfrm_state_probe.c \
             -o dist/xfrm_state_probe.o
+          clang -O2 -g -target bpf \
+            -c poc/xfrm_packet_shape_probe.c \
+            -o dist/xfrm_packet_shape_probe.o
           file dist/xfrm_state_probe.o
+          file dist/xfrm_packet_shape_probe.o
           llvm-objdump -h dist/xfrm_state_probe.o
+          llvm-objdump -h dist/xfrm_packet_shape_probe.o
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
           name: xfrm-bpf-poc
-          path: dist/xfrm_state_probe.o
+          path: dist/*.o
           if-no-files-found: error
